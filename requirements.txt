@@ -1,4 +1,9 @@
 streamlit
 pandas
-matplotlib
+numpy
+scikit-learn
+nltk
+sastrawi
 wordcloud
+matplotlib
+textblob
