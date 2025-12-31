@@ -2,28 +2,26 @@ import streamlit as st
 import pandas as pd
 import re
 import math
-import matplotlib.pyplot as plt
 from collections import Counter
+import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from textblob import TextBlob
 
-st.set_page_config(page_title="Analisis Twitter NLP", layout="wide")
-st.title("🧠 Analisis NLP Twitter (Tanpa Sklearn)")
+st.set_page_config(page_title="NLP Twitter Analysis", layout="wide")
+st.title("🧠 Analisis NLP Twitter (Tanpa sklearn)")
 
-uploaded_file = st.file_uploader("Upload CSV Twitter", type=["csv"])
+uploaded_file = st.file_uploader("Upload file CSV Twitter", type=["csv"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-
     st.subheader("📄 Data Asli")
     st.write(f"Total data: {len(df)}")
     st.dataframe(df)
 
     text_col = st.selectbox("Pilih kolom teks", df.columns)
 
-    # ================= PREPROCESSING =================
     st.sidebar.title("⚙️ Preprocessing")
-    lower = st.sidebar.checkbox("Case Folding", True)
+    lowercase = st.sidebar.checkbox("Case Folding", True)
     remove_url = st.sidebar.checkbox("Remove URL", True)
     remove_symbol = st.sidebar.checkbox("Remove Symbol", True)
 
@@ -33,80 +31,121 @@ if uploaded_file:
             text = re.sub(r"http\S+|www\S+", "", text)
         if remove_symbol:
             text = re.sub(r"[^a-zA-Z\s]", " ", text)
-        if lower:
+        if lowercase:
             text = text.lower()
         return text.strip()
 
     if st.button("🚀 Jalankan Analisis"):
         df["clean_text"] = df[text_col].apply(clean_text)
 
-        # ================= STATISTIK =================
-        st.subheader("📊 Statistik")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Jumlah Data", len(df))
-        col2.metric("Total Kata", df["clean_text"].str.split().str.len().sum())
-        col3.metric("Rata-rata Panjang Teks", round(df["clean_text"].str.len().mean(), 2))
+        st.subheader("📊 Statistik Data")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Jumlah Data", len(df))
+        c2.metric("Total Kata", df["clean_text"].str.split().str.len().sum())
+        c3.metric("Rata-rata Panjang Teks", round(df["clean_text"].str.len().mean(), 2))
 
         # ================= TF-IDF MANUAL =================
-        st.subheader("📐 TF-IDF (Manual)")
+        st.subheader("📐 TF-IDF Manual")
 
         docs = df["clean_text"].tolist()
         N = len(docs)
 
-        tf = []
-        df_count = Counter()
+        term_freq = []
+        doc_freq = Counter()
 
         for doc in docs:
-            words = doc.split()
-            counts = Counter(words)
-            tf.append(counts)
-            for w in counts:
-                df_count[w] += 1
+            tf = Counter(doc.split())
+            term_freq.append(tf)
+            for word in tf:
+                doc_freq[word] += 1
 
         tfidf_scores = {}
-        for i, doc_tf in enumerate(tf):
-            for word, freq in doc_tf.items():
-                idf = math.log(N / (df_count[word]))
-                tfidf_scores[word] = tfidf_scores.get(word, 0) + freq * idf
+        for tf in term_freq:
+            for word, count in tf.items():
+                idf = math.log((N + 1) / (doc_freq[word] + 1)) + 1
+                tfidf_scores[word] = tfidf_scores.get(word, 0) + count * idf
 
-        tfidf_df = pd.DataFrame(
-            tfidf_scores.items(),
-            columns=["Kata", "TF-IDF"]
-        ).sort_values(by="TF-IDF", ascending=False)
+        tfidf_df = pd.DataFrame(tfidf_scores.items(), columns=["Kata", "TF-IDF"])
+        tfidf_df = tfidf_df.sort_values(by="TF-IDF", ascending=False)
 
         st.dataframe(tfidf_df.head(20))
 
+        fig, ax = plt.subplots()
+        top10 = tfidf_df.head(10)
+        ax.barh(top10["Kata"], top10["TF-IDF"])
+        ax.invert_yaxis()
+        st.pyplot(fig)
+
         # ================= WORDCLOUD =================
         st.subheader("☁️ WordCloud")
-        if not tfidf_df.empty:
-            wc = WordCloud(width=800, height=400, background_color="white")
-            wc.generate_from_frequencies(dict(tfidf_df.head(100).values))
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.imshow(wc)
-            ax.axis("off")
-            st.pyplot(fig)
+        wc = WordCloud(width=800, height=400, background_color="white")
+        wc.generate_from_frequencies(dict(tfidf_df.head(100).values))
+        fig_wc, ax_wc = plt.subplots(figsize=(10, 5))
+        ax_wc.imshow(wc)
+        ax_wc.axis("off")
+        st.pyplot(fig_wc)
 
         # ================= SENTIMENT =================
         st.subheader("😊 Analisis Sentimen")
 
-        def sentiment(text):
-            p = TextBlob(text).sentiment.polarity
-            if p > 0.1:
+        def sentiment_label(text):
+            polarity = TextBlob(text).sentiment.polarity
+            if polarity > 0.1:
                 return "Positive"
-            elif p < -0.1:
+            elif polarity < -0.1:
                 return "Negative"
             return "Neutral"
 
-        df["Sentiment"] = df["clean_text"].apply(sentiment)
+        df["sentiment"] = df["clean_text"].apply(sentiment_label)
 
-        sent = df["Sentiment"].value_counts()
-        fig, ax = plt.subplots()
-        ax.pie(sent, labels=sent.index, autopct="%1.1f%%")
-        st.pyplot(fig)
+        sent_count = df["sentiment"].value_counts()
+        fig2, ax2 = plt.subplots()
+        ax2.pie(sent_count, labels=sent_count.index, autopct="%1.1f%%")
+        st.pyplot(fig2)
+
+        # ================= NAIVE BAYES MANUAL =================
+        st.subheader("🤖 Naive Bayes (Manual)")
+
+        labels = df["sentiment"].unique()
+        label_counts = df["sentiment"].value_counts().to_dict()
+        total_docs = len(df)
+
+        word_counts = {label: Counter() for label in labels}
+        total_words = {label: 0 for label in labels}
+
+        for _, row in df.iterrows():
+            label = row["sentiment"]
+            words = row["clean_text"].split()
+            for w in words:
+                word_counts[label][w] += 1
+                total_words[label] += 1
+
+        vocab = set(tfidf_df["Kata"])
+        vocab_size = len(vocab)
+
+        def predict_nb(text):
+            words = text.split()
+            scores = {}
+            for label in labels:
+                log_prob = math.log(label_counts[label] / total_docs)
+                for w in words:
+                    word_freq = word_counts[label].get(w, 0) + 1
+                    prob = word_freq / (total_words[label] + vocab_size)
+                    log_prob += math.log(prob)
+                scores[label] = log_prob
+            return max(scores, key=scores.get)
+
+        df["nb_prediction"] = df["clean_text"].apply(predict_nb)
+
+        st.subheader("📋 Hasil Prediksi Naive Bayes")
+        st.dataframe(df[[text_col, "sentiment", "nb_prediction"]].head(10))
+
+        accuracy = (df["sentiment"] == df["nb_prediction"]).mean() * 100
+        st.metric("Akurasi Naive Bayes", f"{accuracy:.2f}%")
 
         st.download_button(
-            "⬇️ Download Hasil",
+            "⬇️ Download Hasil Analisis",
             df.to_csv(index=False),
-            "hasil_nlp.csv",
+            "hasil_nlp_twitter.csv",
             "text/csv"
         )
