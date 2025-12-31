@@ -1,135 +1,151 @@
 import streamlit as st
 import pandas as pd
 import re
-import string
-import matplotlib.pyplot as plt
-
+import math
 from collections import Counter
+import matplotlib.pyplot as plt
 from wordcloud import WordCloud
+from textblob import TextBlob
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+st.set_page_config(page_title="NLP Twitter Analysis", layout="wide")
+st.title("🧠 Analisis NLP Twitter (Tanpa sklearn)")
 
-st.set_page_config(page_title="NLP Text Analytics", layout="wide")
-st.title("🧠 NLP Text Analytics Lengkap")
-
-uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
+uploaded_file = st.file_uploader("Upload file CSV Twitter", type=["csv"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-
-    st.subheader("📄 Data CSV (SEMUA BARIS)")
-    st.write(f"Total baris terbaca: {len(df)}")
-    st.dataframe(df, use_container_width=True)
+    st.subheader("📄 Data Asli")
+    st.write(f"Total data: {len(df)}")
+    st.dataframe(df)
 
     text_col = st.selectbox("Pilih kolom teks", df.columns)
 
     st.sidebar.title("⚙️ Preprocessing")
-    remove_duplicate = st.sidebar.checkbox("Remove Duplicate")
-    remove_url = st.sidebar.checkbox("Remove URL")
-    remove_username = st.sidebar.checkbox("Remove Username")
-    remove_symbol = st.sidebar.checkbox("Remove Symbol")
-    remove_number = st.sidebar.checkbox("Remove Number")
-    lowercase = st.sidebar.checkbox("Case Folding")
+    lowercase = st.sidebar.checkbox("Case Folding", True)
+    remove_url = st.sidebar.checkbox("Remove URL", True)
+    remove_symbol = st.sidebar.checkbox("Remove Symbol", True)
 
     def clean_text(text):
         text = str(text)
         if remove_url:
             text = re.sub(r"http\S+|www\S+", "", text)
-        if remove_username:
-            text = re.sub(r"@\w+", "", text)
-        if remove_number:
-            text = re.sub(r"\d+", "", text)
         if remove_symbol:
-            text = text.translate(str.maketrans("", "", string.punctuation))
+            text = re.sub(r"[^a-zA-Z\s]", " ", text)
         if lowercase:
             text = text.lower()
         return text.strip()
 
     if st.button("🚀 Jalankan Analisis"):
-        if remove_duplicate:
-            df = df.drop_duplicates(subset=[text_col])
-
         df["clean_text"] = df[text_col].apply(clean_text)
 
         st.subheader("📊 Statistik Data")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Jumlah Data", len(df))
-        col2.metric("Total Kata", df["clean_text"].str.split().str.len().sum())
-        col3.metric("Rata-rata Panjang Teks", round(df["clean_text"].str.len().mean(), 2))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Jumlah Data", len(df))
+        c2.metric("Total Kata", df["clean_text"].str.split().str.len().sum())
+        c3.metric("Rata-rata Panjang Teks", round(df["clean_text"].str.len().mean(), 2))
 
-        words = " ".join(df["clean_text"]).split()
-        freq = Counter(words)
-        top_words = freq.most_common(20)
-        word_df = pd.DataFrame(top_words, columns=["Kata", "Frekuensi"])
+        # ================= TF-IDF MANUAL =================
+        st.subheader("📐 TF-IDF Manual")
 
-        st.subheader("📈 20 Kata Terbanyak")
-        st.dataframe(word_df)
+        docs = df["clean_text"].tolist()
+        N = len(docs)
+
+        term_freq = []
+        doc_freq = Counter()
+
+        for doc in docs:
+            tf = Counter(doc.split())
+            term_freq.append(tf)
+            for word in tf:
+                doc_freq[word] += 1
+
+        tfidf_scores = {}
+        for tf in term_freq:
+            for word, count in tf.items():
+                idf = math.log((N + 1) / (doc_freq[word] + 1)) + 1
+                tfidf_scores[word] = tfidf_scores.get(word, 0) + count * idf
+
+        tfidf_df = pd.DataFrame(tfidf_scores.items(), columns=["Kata", "TF-IDF"])
+        tfidf_df = tfidf_df.sort_values(by="TF-IDF", ascending=False)
+
+        st.dataframe(tfidf_df.head(20))
 
         fig, ax = plt.subplots()
-        ax.barh(word_df["Kata"], word_df["Frekuensi"])
+        top10 = tfidf_df.head(10)
+        ax.barh(top10["Kata"], top10["TF-IDF"])
         ax.invert_yaxis()
         st.pyplot(fig)
 
+        # ================= WORDCLOUD =================
         st.subheader("☁️ WordCloud")
-        if len(words) > 0:
-            wc = WordCloud(width=800, height=400, background_color="white").generate(" ".join(words))
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.imshow(wc)
-            ax.axis("off")
-            st.pyplot(fig)
+        wc = WordCloud(width=800, height=400, background_color="white")
+        wc.generate_from_frequencies(dict(tfidf_df.head(100).values))
+        fig_wc, ax_wc = plt.subplots(figsize=(10, 5))
+        ax_wc.imshow(wc)
+        ax_wc.axis("off")
+        st.pyplot(fig_wc)
 
-        positive_words = ["baik", "bagus", "suka", "senang", "mantap", "puas"]
-        negative_words = ["buruk", "jelek", "kecewa", "lambat", "error"]
+        # ================= SENTIMENT =================
+        st.subheader("😊 Analisis Sentimen")
 
-        def sentiment(text):
-            pos = sum(w in text for w in positive_words)
-            neg = sum(w in text for w in negative_words)
-            if pos > neg:
-                return "Positif"
-            elif neg > pos:
-                return "Negatif"
-            return "Netral"
+        def sentiment_label(text):
+            polarity = TextBlob(text).sentiment.polarity
+            if polarity > 0.1:
+                return "Positive"
+            elif polarity < -0.1:
+                return "Negative"
+            return "Neutral"
 
-        df["sentiment"] = df["clean_text"].apply(sentiment)
+        df["sentiment"] = df["clean_text"].apply(sentiment_label)
 
-        st.subheader("😊 Statistik Sentimen")
-        sent = df["sentiment"].value_counts()
-        fig, ax = plt.subplots()
-        ax.pie(sent, labels=sent.index, autopct="%1.1f%%")
-        st.pyplot(fig)
+        sent_count = df["sentiment"].value_counts()
+        fig2, ax2 = plt.subplots()
+        ax2.pie(sent_count, labels=sent_count.index, autopct="%1.1f%%")
+        st.pyplot(fig2)
 
-        st.subheader("📐 TF-IDF Feature Extraction")
-        vectorizer = TfidfVectorizer(max_features=1000)
-        X = vectorizer.fit_transform(df["clean_text"])
-        y = df["sentiment"]
+        # ================= NAIVE BAYES MANUAL =================
+        st.subheader("🤖 Naive Bayes (Manual)")
 
-        tfidf_df = pd.DataFrame(X.toarray(), columns=vectorizer.get_feature_names_out())
-        st.dataframe(tfidf_df.head())
+        labels = df["sentiment"].unique()
+        label_counts = df["sentiment"].value_counts().to_dict()
+        total_docs = len(df)
 
-        st.subheader("🤖 Machine Learning – Naive Bayes")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        word_counts = {label: Counter() for label in labels}
+        total_words = {label: 0 for label in labels}
 
-        model = MultinomialNB()
-        model.fit(X_train, y_train)
+        for _, row in df.iterrows():
+            label = row["sentiment"]
+            words = row["clean_text"].split()
+            for w in words:
+                word_counts[label][w] += 1
+                total_words[label] += 1
 
-        y_pred = model.predict(X_test)
+        vocab = set(tfidf_df["Kata"])
+        vocab_size = len(vocab)
 
-        st.metric("Akurasi Model", round(accuracy_score(y_test, y_pred) * 100, 2))
+        def predict_nb(text):
+            words = text.split()
+            scores = {}
+            for label in labels:
+                log_prob = math.log(label_counts[label] / total_docs)
+                for w in words:
+                    word_freq = word_counts[label].get(w, 0) + 1
+                    prob = word_freq / (total_words[label] + vocab_size)
+                    log_prob += math.log(prob)
+                scores[label] = log_prob
+            return max(scores, key=scores.get)
 
-        st.text("Classification Report")
-        st.text(classification_report(y_test, y_pred))
+        df["nb_prediction"] = df["clean_text"].apply(predict_nb)
 
-        st.text("Confusion Matrix")
-        st.write(confusion_matrix(y_test, y_pred))
+        st.subheader("📋 Hasil Prediksi Naive Bayes")
+        st.dataframe(df[[text_col, "sentiment", "nb_prediction"]].head(10))
+
+        accuracy = (df["sentiment"] == df["nb_prediction"]).mean() * 100
+        st.metric("Akurasi Naive Bayes", f"{accuracy:.2f}%")
 
         st.download_button(
-            "⬇️ Download Hasil Lengkap",
+            "⬇️ Download Hasil Analisis",
             df.to_csv(index=False),
-            "hasil_nlp_lengkap.csv",
+            "hasil_nlp_twitter.csv",
             "text/csv"
         )
